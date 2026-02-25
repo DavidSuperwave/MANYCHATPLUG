@@ -23,6 +23,10 @@ alalegal-crm/
 ├── crm.js             # CRM class (leads, messages, stages)
 ├── cli.js             # Interactive CLI for manual mode
 ├── monitor.js         # Auto-polling monitor
+├── telegram/          # 📱 Telegram bot (dedicated channel)
+│   ├── bot.js
+│   ├── package.json
+│   └── README.md
 ├── TRAINING.md        # Your training patterns & guardrails
 ├── alalegal.db        # DuckDB database (created on first run)
 └── package.json
@@ -47,7 +51,7 @@ https://web-production-b08f3.up.railway.app
 
 ## 💬 Usage
 
-### Option A: Interactive CLI (Recommended)
+### Option A: Interactive CLI (Terminal)
 ```bash
 npm run cli
 ```
@@ -59,7 +63,29 @@ Commands:
 - `reply [id] [message]` - Quick reply
 - `stage [id] [stage]` - Move lead stage
 
-### Option B: Monitor Mode (Auto-notify)
+### Option B: Telegram Bot (📱 Recommended)
+
+Dedicated Telegram channel for mobile notifications:
+
+```bash
+npm run telegram
+```
+
+**Features:**
+- 🔥 **Instant notifications** when fallecimiento detected
+- 📱 **Mobile-optimized** messages
+- ⚡ **Quick reply buttons** from notifications
+- 📊 **View pipeline** on-the-go
+
+**Setup:**
+1. Talk to @BotFather, create bot, copy token
+2. Get your chat ID
+3. Configure `.env` in `telegram/` folder
+4. Run `npm run telegram`
+
+See `telegram/README.md` for detailed setup.
+
+### Option C: Monitor Mode (Auto-notify to terminal)
 ```bash
 npm run monitor
 ```
@@ -73,11 +99,26 @@ This polls every 10 seconds and prints new messages to terminal.
 | Stage | Description |
 |-------|-------------|
 | **inbound** | New lead, first message |
-| **qualified** | Has CURP, passed initial check |
+| **qualified** | Confirmed fallecimiento case |
+| **document_pending** | Waiting for documents |
 | **set** | Appointment scheduled |
 | **intake_form** | Client completed intake |
 | **closed_won** | Became paying client |
 | **closed_lost** | Unqualified or no conversion |
+| **discarded** | Auto-filtered (compliments, spam) |
+
+---
+
+## 🏷️ Message Classification
+
+Every message gets automatically classified:
+
+| Class | Icon | Description | Action |
+|-------|------|-------------|--------|
+| **🔥 PRIORITY** | Red | Fallecimiento mentioned | Reply immediately |
+| **👤 ENGAGE** | Yellow | Service inquiry, general | Probe: "¿Es por fallecimiento?" |
+| **❓ NEUTRAL** | Gray | Just greetings | Ask qualifying question |
+| **🗑️ DISCARD** | Black | Compliments, spam | No reply, auto-discarded |
 
 ---
 
@@ -87,24 +128,28 @@ This polls every 10 seconds and prints new messages to terminal.
 
 **I show you:**
 ```
-🆕 NEW LEAD | Stage: INBOUND
-👤 Christopher
+🔥 PRIORITY | 🆕 NEW LEAD | Stage: INBOUND
+👤 Maria Gonzalez
 🆔 ID: 26132504589699601
-💬 "Saludos"
+💬 "Mi esposo falleció y tenía Infonavit"
+🧠 Reason: Detected fallecimiento keyword: "falleció"
+
+💡 Suggested response:
+Lamento mucho tu pérdida. En ALA LEGAL nos especializamos...
 ```
 
 **You respond:**
-> "Reply to 26132504589699601: Hola Christopher, gracias por contactar a ALA LEGAL. ¿En qué puedo ayudarte con tu crédito Infonavit?"
+> "Reply to 26132504589699601: Hola Maria, lamento mucho tu pérdida. Para ayudarte necesito saber si hay testamento..."
 
-**Or tell me via CLI:**
+**Or in Telegram:**
 ```
-crm> reply 26132504589699601 Hola Christopher, ¿en qué puedo ayudarte?
+/reply_26132504589699601 Hola Maria, lamento mucho tu pérdida...
 ```
 
 ### Save training pattern:
-After I send, say: **"Save that pattern for greetings"**
+After I send, say: **"Save that pattern for fallecimiento responses"**
 
-I store it in `TRAINING.md` and use it next time someone says "Hola".
+I store it in `TRAINING.md` and use it next time.
 
 ---
 
@@ -126,13 +171,14 @@ When you tell me to reply, I:
 
 ### Tables:
 - **leads** - All prospects with current stage
-- **messages** - Full conversation history
+- **messages** - Full conversation history with classification
 - **stage_history** - Audit log of stage changes
 - **training_memory** - Your response patterns
 
 ### Views:
 - `v_pipeline` - Stage counts
 - `v_recent_leads` - Recent activity
+- `v_classification_stats` - Classification breakdown
 
 ---
 
@@ -141,37 +187,42 @@ When you tell me to reply, I:
 ```bash
 $ npm run cli
 
-🤖 ALA LEGAL - Manual CRM Training Mode
+🤖 ALA LEGAL - Fallecimientos CRM Training Mode
 
 crm> check
 
 📥 Checking inbox...
 
-🆕 NEW LEAD | Stage: INBOUND
+🔥 PRIORITY | 🆕 NEW LEAD | Stage: INBOUND
 ============================================================
-👤 Christopher
+👤 Maria Gonzalez
 🆔 ID: 26132504589699601
-💬 "Necesito de sus servicios"
-⏰ 2/24/2026, 6:46:17 PM
+💬 "Mi esposo falleció y tenía Infonavit"
+🧠 Reason: Detected fallecimiento keyword: "falleció"
 ============================================================
 
-💡 How should I respond? 
-> Hola Christopher, soy el asistente de ALA LEGAL. Claro que podemos ayudarte con tu crédito Infonavit. ¿Me podrías compartir tu CURP para hacer una precalificación rápida?
+💡 SUGGESTED RESPONSE:
+   Lamento mucho tu pérdida. En ALA LEGAL nos especializamos...
+
+💬 Your response (or press Enter to use suggested, "skip" to ignore):
+   > Hola Maria, lamento mucho tu pérdida. ¿Podrías contarme si hay testamento?
 
 📤 Sending...
 ✅ Sent and saved to training memory!
 
-📋 Move to new stage? (qualified/set/intake_form/n): n
-⏩ Staying in inbound
+📋 Move to new stage? (suggested: qualified, or type other/n):
+   > qualified
+✅ Moved to QUALIFIED
 
 crm> pipeline
 
 📊 PIPELINE
 
-  INBOUND        : 1 leads
-  QUALIFIED      : 0 leads
-  SET            : 0 leads
-  INTAKE_FORM    : 0 leads
+  📥 INBOUND          : 1 leads
+  ✅ QUALIFIED        : 1 leads
+  📄 DOCUMENT PENDING : 0 leads
+  📅 SET              : 0 leads
+  📝 INTAKE FORM      : 0 leads
 
 crm> exit
 👋 Goodbye!
@@ -179,10 +230,43 @@ crm> exit
 
 ---
 
+## 📱 Telegram Bot Example
+
+When a fallecimiento comes in:
+
+```
+🔔🔔🔔 FALLECIMIENTO DETECTADO 🔔🔔🔔
+
+🔥 PRIORITY
+🆕 NUEVO LEAD | 📥 INBOUND
+
+👤 Nombre: Maria Gonzalez
+🆔 ID: `26132504589699601`
+💬 Mensaje: "Mi esposo falleció y tenía Infonavit"
+
+🧠 Razón: Detected fallecimiento keyword: "falleció"
+
+💡 Respuesta sugerida:
+Lamento mucho tu pérdida. En ALA LEGAL nos especializamos...
+
+📌 Comandos:
+• /reply_26132504589699601 [tu mensaje]
+• /stage_26132504589699601 qualified
+• /discard_26132504589699601
+```
+
+Tap to reply:
+```
+/reply_26132504589699601 Hola Maria, lamento mucho tu pérdida...
+```
+
+---
+
 ## 🎨 Your Training File
 
 Edit `TRAINING.md` to define:
-- Response patterns
+- Classification rules
+- Response patterns by category
 - Tone/voice guidelines
 - Qualification criteria
 - Escalation triggers
@@ -193,13 +277,14 @@ I read this file to learn your style.
 
 ## ⚡ Quick Commands
 
-| What you want | What to type |
-|--------------|--------------|
-| Check messages | `npm run cli` → `check` |
-| Quick reply | `reply [id] [message]` |
-| Move stage | `stage [id] qualified` |
-| View pipeline | `pipeline` |
-| View lead | `lead [id]` |
+| What you want | CLI | Telegram |
+|--------------|-----|----------|
+| Check messages | `check` | `/check` |
+| Quick reply | `reply [id] [msg]` | `/reply [id] [msg]` |
+| Move stage | `stage [id] qualified` | `/stage [id] qualified` |
+| View pipeline | `pipeline` | `/pipeline` |
+| View lead | `lead [id]` | `/leads [stage]` |
+| Discard | `stage [id] discarded` | `/discard [id]` |
 
 ---
 
@@ -214,4 +299,24 @@ No external database needed.
 
 ---
 
-Ready? Run `npm run cli` and let's train me! 🚀
+## 🚀 Recommended Setup
+
+**For daily use:**
+1. **Telegram bot** running 24/7 (Railway or local)
+2. **Bridge** already deployed on Railway
+3. **ManyChat** webhook configured
+
+**Workflow:**
+1. Lead messages on Facebook
+2. **Telegram pings you** instantly
+3. **You reply** from your phone
+4. **I learn** your patterns
+5. **Pipeline updates** automatically
+
+---
+
+Ready? Choose your interface:
+- 💻 `npm run cli` (terminal)
+- 📱 `npm run telegram` (mobile notifications)
+
+🚀
