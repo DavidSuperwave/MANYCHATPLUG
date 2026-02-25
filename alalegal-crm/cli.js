@@ -15,6 +15,17 @@ function ask(question) {
     return new Promise(resolve => rl.question(question, resolve));
 }
 
+// Format classification for display
+function formatClassification(classification) {
+    const icons = {
+        'priority': '🔥 PRIORITY',
+        'engage': '👤 ENGAGE',
+        'neutral': '❓ NEUTRAL',
+        'discard': '🗑️ DISCARD'
+    };
+    return icons[classification] || classification?.toUpperCase();
+}
+
 // Check inbox manually
 async function checkInbox() {
     console.log('\n📥 Checking inbox...\n');
@@ -36,45 +47,99 @@ async function checkInbox() {
             const name = msg.subscriber_name || 'Unknown';
             const id = msg.subscriber_id;
             
-            // Create/update lead in CRM
-            const lead = await crm.createOrUpdateLead(id, name, text);
+            // Classify the message
+            const classification = crm.classifyMessage(text);
             
-            // Log inbound message
-            await crm.logMessage(id, 'inbound', text);
+            // Create/update lead in CRM with classification
+            const lead = await crm.createOrUpdateLead(id, name, text, classification.classification);
+            
+            // Log inbound message with classification
+            await crm.logMessage(id, 'inbound', text, classification.classification);
             
             // Determine if new or existing
             const status = lead.isNew ? '🆕 NEW LEAD' : '📝 Existing';
             const stage = lead.stage;
             
-            console.log(`\n${'='.repeat(60)}`);
-            console.log(`${status} | Stage: ${stage.toUpperCase()}`);
-            console.log(`${'='.repeat(60)}`);
+            // Show classification banner
+            console.log(`\n${'='.repeat(70)}`);
+            console.log(`${formatClassification(classification.classification)} | ${status} | Stage: ${stage.toUpperCase()}`);
+            console.log(`${'='.repeat(70)}`);
             console.log(`👤 ${name}`);
             console.log(`🆔 ID: ${id}`);
             console.log(`💬 "${text}"`);
-            console.log(`⏰ ${new Date(msg.received_at).toLocaleString()}`);
-            console.log(`${'='.repeat(60)}\n`);
+            console.log(`🧠 Reason: ${classification.reason}`);
+            console.log(`⏰ ${new Date(msg.received_at || Date.now()).toLocaleString()}`);
+            console.log(`${'='.repeat(70)}\n`);
+            
+            // Get suggested response
+            const suggestion = crm.getSuggestedResponse(classification.classification);
+            
+            if (classification.action === 'no_reply') {
+                console.log('🗑️  CLASSIFIED AS DISCARD - No reply needed.');
+                console.log('   (Logged to CRM but will not engage)\n');
+                
+                // Auto-move to discarded stage
+                if (stage !== 'discarded') {
+                    await crm.changeStage(id, 'discarded', 'ai', 'Auto-classified as discard');
+                    console.log('✅ Auto-moved to DISCARDED stage\n');
+                }
+                continue; // Skip to next message
+            }
+            
+            // Show suggested response
+            console.log('💡 SUGGESTED RESPONSE:');
+            console.log(`   ${suggestion.es}`);
+            console.log(`   (Classification: ${suggestion.en})\n`);
             
             // Training mode - ask for response
-            const response = await ask('💡 How should I respond? (or press Enter to skip): ');
+            const userResponse = await ask('💬 Your response (or press Enter to use suggested, "skip" to ignore): ');
             
-            if (response.trim()) {
-                // Send the message
-                console.log('📤 Sending...');
-                await crm.sendMessage(id, response.trim());
-                
-                // Save training
-                await crm.saveTraining(text, `Stage: ${stage}`, response.trim(), 'manual_training');
-                console.log('✅ Sent and saved to training memory!\n');
-                
-                // Ask about stage movement
-                const moveStage = await ask('📋 Move to new stage? (qualified/set/intake_form/n): ');
-                if (moveStage !== 'n' && moveStage.trim()) {
-                    await crm.changeStage(id, moveStage.trim(), 'human', 'Manual qualification');
-                    console.log(`✅ Moved to ${moveStage}\n`);
-                }
-            } else {
+            let finalResponse = userResponse.trim();
+            
+            if (finalResponse.toLowerCase() === 'skip') {
                 console.log('⏩ Skipped\n');
+                continue;
+            }
+            
+            if (!finalResponse) {
+                // Use suggested response
+                finalResponse = suggestion.es;
+                console.log(`✅ Using suggested response...\n`);
+            }
+            
+            // Send the message
+            console.log('📤 Sending...');
+            await crm.sendMessage(id, finalResponse);
+            
+            // Save training
+            await crm.saveTraining(
+                text, 
+                `Stage: ${stage}, Classification: ${classification.classification}`, 
+                finalResponse, 
+                'manual_training',
+                classification.classification
+            );
+            console.log('✅ Sent and saved to training memory!\n');
+            
+            // Ask about stage movement based on classification
+            let suggestedStage = null;
+            if (classification.classification === 'priority') {
+                suggestedStage = 'qualified';
+                console.log('🔥 This is a PRIORITY (fallecimiento) case.');
+            }
+            
+            const stagePrompt = suggestedStage 
+                ? `📋 Move to new stage? (suggested: ${suggestedStage}, or type other/n): `
+                : '📋 Move to new stage? (qualified/document_pending/set/n): ';
+            
+            const moveStage = await ask(stagePrompt);
+            
+            if (moveStage.toLowerCase() !== 'n' && moveStage.trim()) {
+                const targetStage = moveStage === 's' ? suggestedStage : moveStage.trim();
+                if (targetStage) {
+                    await crm.changeStage(id, targetStage, 'human', `Manual move after ${classification.classification} classification`);
+                    console.log(`✅ Moved to ${targetStage.toUpperCase()}\n`);
+                }
             }
         }
         
@@ -89,7 +154,36 @@ async function showPipeline() {
     const stages = await crm.getPipeline();
     
     stages.forEach(row => {
-        console.log(`  ${row.stage.toUpperCase().padEnd(15)}: ${row.count} leads`);
+        const icon = {
+            'inbound': '📥',
+            'qualified': '✅',
+            'document_pending': '📄',
+            'set': '📅',
+            'intake_form': '📝',
+            'closed_won': '💰',
+            'closed_lost': '❌',
+            'discarded': '🗑️'
+        }[row.stage] || '•';
+        
+        console.log(`  ${icon} ${row.stage.toUpperCase().padEnd(18)}: ${row.count} leads`);
+    });
+    console.log('');
+}
+
+// Show classification stats
+async function showClassificationStats() {
+    console.log('\n📈 CLASSIFICATION STATS\n');
+    const stats = await crm.getClassificationStats();
+    
+    stats.forEach(row => {
+        const icon = {
+            'priority': '🔥',
+            'engage': '👤',
+            'neutral': '❓',
+            'discard': '🗑️'
+        }[row.classification] || '•';
+        
+        console.log(`  ${icon} ${row.classification.toUpperCase().padEnd(12)}: ${row.message_count} messages (${row.inbound} in, ${row.outbound} out)`);
     });
     console.log('');
 }
@@ -102,12 +196,14 @@ async function showLead(subscriberId) {
         return;
     }
     
-    console.log(`\n👤 ${lead.subscriber_name || 'Unknown'}`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`👤 ${lead.subscriber_name || 'Unknown'}`);
     console.log(`🆔 ID: ${lead.subscriber_id}`);
-    console.log(`📍 Stage: ${lead.stage}`);
-    console.log(`📅 Created: ${lead.created_at}`);
+    console.log(`📍 Stage: ${lead.stage?.toUpperCase()}`);
+    console.log(`🏷️  Classification: ${formatClassification(lead.classification)}`);
+    console.log(`📅 Created: ${new Date(lead.created_at).toLocaleDateString()}`);
     console.log(`💬 Last message: ${lead.last_message || 'None'}`);
-    console.log('');
+    console.log(`${'='.repeat(60)}\n`);
     
     // Show conversation
     const convo = await crm.getConversation(subscriberId, 10);
@@ -115,7 +211,8 @@ async function showLead(subscriberId) {
         console.log('🗨️  Recent conversation:');
         convo.forEach(msg => {
             const dir = msg.direction === 'inbound' ? '👤' : '🤖';
-            console.log(`   ${dir} ${msg.message_text}`);
+            const cls = msg.classification ? `(${msg.classification})` : '';
+            console.log(`   ${dir} ${msg.message_text} ${cls}`);
         });
         console.log('');
     }
@@ -125,18 +222,29 @@ async function showLead(subscriberId) {
 async function main() {
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║         🤖 ALA LEGAL - Manual CRM Training Mode           ║
+║     🤖 ALA LEGAL - Fallecimientos CRM Training Mode       ║
+║              (Manual Classification System)               ║
+╠═══════════════════════════════════════════════════════════╣
+║  Specialty: Fallecimientos con crédito Infonavit          ║
+║  Mission: Filter for death-related cases only             ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Commands:
-  1. check     - Check inbox for new messages
-  2. pipeline  - View pipeline stages
-  3. lead [id] - View lead details
-  4. reply [id] [msg] - Quick reply to lead
-  5. stage [id] [stage] - Move lead to stage
-  6. exit      - Quit
+Classification System:
+  🔥 PRIORITY  = Fallecimiento mentioned → Reply immediately
+  👤 ENGAGE    = Service inquiry → Probe for fallecimiento
+  ❓ NEUTRAL   = Unclear → Ask qualifying question
+  🗑️ DISCARD   = Compliments/spam → No reply
 
-Stages: inbound → qualified → set → intake_form → closed_won/lost
+Commands:
+  1. check      - Check inbox & classify new messages
+  2. pipeline   - View pipeline stages
+  3. stats      - View classification statistics
+  4. lead [id]  - View lead details
+  5. reply [id] [msg] - Quick reply to lead
+  6. stage [id] [stage] - Move lead to stage
+  7. exit       - Quit
+
+Stages: inbound → qualified → document_pending → set → intake_form → closed
 `);
 
     while (true) {
@@ -156,6 +264,11 @@ Stages: inbound → qualified → set → intake_form → closed_won/lost
                 break;
                 
             case '3':
+            case 'stats':
+                await showClassificationStats();
+                break;
+                
+            case '4':
             case 'lead':
                 if (parts[1]) {
                     await showLead(parts[1]);
@@ -164,7 +277,7 @@ Stages: inbound → qualified → set → intake_form → closed_won/lost
                 }
                 break;
                 
-            case '4':
+            case '5':
             case 'reply':
                 if (parts.length >= 3) {
                     const id = parts[1];
@@ -176,7 +289,7 @@ Stages: inbound → qualified → set → intake_form → closed_won/lost
                 }
                 break;
                 
-            case '5':
+            case '6':
             case 'stage':
                 if (parts.length >= 3) {
                     const id = parts[1];
@@ -188,7 +301,7 @@ Stages: inbound → qualified → set → intake_form → closed_won/lost
                 }
                 break;
                 
-            case '6':
+            case '7':
             case 'exit':
             case 'quit':
                 console.log('👋 Goodbye!');
@@ -198,7 +311,7 @@ Stages: inbound → qualified → set → intake_form → closed_won/lost
                 
             default:
                 if (cmd) {
-                    console.log('Unknown command. Type a number (1-6) or command name.');
+                    console.log('Unknown command. Type a number (1-7) or command name.');
                 }
         }
     }

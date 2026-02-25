@@ -1,5 +1,6 @@
 -- ALA LEGAL CRM Schema
 -- Leads/Prospects tracking with qualification stages
+-- SPECIALTY: Fallecimientos (death-related Infonavit cases)
 
 CREATE SEQUENCE IF NOT EXISTS lead_id_seq START 1000;
 
@@ -14,7 +15,9 @@ CREATE TABLE IF NOT EXISTS leads (
     curp VARCHAR,
     nss VARCHAR,
     source VARCHAR DEFAULT 'messenger',
-    stage VARCHAR DEFAULT 'inbound', -- inbound, qualified, set, intake_form, closed_won, closed_lost
+    -- Stages: inbound, qualified, document_pending, set, intake_form, closed_won, closed_lost, discarded
+    stage VARCHAR DEFAULT 'inbound',
+    classification VARCHAR, -- priority, engage, neutral, discard
     stage_changed_at TIMESTAMP,
     assigned_to VARCHAR,
     notes TEXT,
@@ -33,6 +36,7 @@ CREATE TABLE IF NOT EXISTS messages (
     direction VARCHAR NOT NULL, -- 'inbound' or 'outbound'
     message_text TEXT,
     message_type VARCHAR DEFAULT 'text', -- text, image, audio
+    classification VARCHAR, -- priority, engage, neutral, discard
     intent VARCHAR, -- greeting, pricing, support, appointment, qualification
     sentiment VARCHAR, -- positive, neutral, negative
     ai_suggested_response TEXT,
@@ -61,15 +65,29 @@ CREATE TABLE IF NOT EXISTS training_memory (
     context VARCHAR, -- situation
     your_response TEXT, -- what you told me to say
     category VARCHAR, -- greeting, objection, pricing, etc.
+    classification VARCHAR, -- priority, engage, neutral, discard
     times_used INTEGER DEFAULT 0,
     effectiveness INTEGER, -- 1-5 rating
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Classification stats view
+CREATE OR REPLACE VIEW v_classification_stats AS
+SELECT 
+    classification,
+    COUNT(*) as message_count,
+    COUNT(CASE WHEN direction = 'inbound' THEN 1 END) as inbound,
+    COUNT(CASE WHEN direction = 'outbound' THEN 1 END) as outbound
+FROM messages
+WHERE classification IS NOT NULL
+GROUP BY classification;
+
 -- Create indexes
 CREATE INDEX IF NOT EXISTS idx_leads_stage ON leads(stage);
+CREATE INDEX IF NOT EXISTS idx_leads_classification ON leads(classification);
 CREATE INDEX IF NOT EXISTS idx_leads_subscriber ON leads(subscriber_id);
 CREATE INDEX IF NOT EXISTS idx_messages_subscriber ON messages(subscriber_id);
+CREATE INDEX IF NOT EXISTS idx_messages_classification ON messages(classification);
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 
 -- Views for pipeline
