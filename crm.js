@@ -135,11 +135,13 @@ class LocalCRM {
     // Create or update lead
     async createOrUpdateLead(subscriberId, name, message, classification) {
         return new Promise((resolve, reject) => {
-            this.db.get(
+            this.db.all(
                 'SELECT stage, classification FROM leads WHERE subscriber_id = ?',
                 [subscriberId],
-                (err, row) => {
+                (err, rows) => {
                     if (err) return reject(err);
+                    
+                    const row = rows && rows[0];
                     
                     if (row) {
                         // Update
@@ -165,8 +167,8 @@ class LocalCRM {
                         
                         this.db.run(
                             `INSERT INTO leads (subscriber_id, subscriber_name, last_message, 
-                                              source, stage, classification)
-                             VALUES (?, ?, ?, 'messenger', ?, ?)`,
+                                              stage, classification)
+                             VALUES (?, ?, ?, ?, ?)`,
                             [subscriberId, name, message, initialStage, classification],
                             function(err) {
                                 if (err) return reject(err);
@@ -185,14 +187,12 @@ class LocalCRM {
     }
 
     // Log message
-    async logMessage(subscriberId, direction, text, classification, metadata = {}) {
+    async logMessage(subscriberId, direction, text, classification) {
         return new Promise((resolve, reject) => {
             this.db.run(
-                `INSERT INTO messages (subscriber_id, direction, message_text, 
-                                     classification, intent, sentiment, ai_analysis)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [subscriberId, direction, text, classification, 
-                 metadata.intent, metadata.sentiment, metadata.analysis],
+                `INSERT INTO messages (subscriber_id, direction, message_text, classification)
+                 VALUES (?, ?, ?, ?)`,
+                [subscriberId, direction, text, classification],
                 function(err) {
                     if (err) return reject(err);
                     resolve(this.lastID);
@@ -219,12 +219,12 @@ class LocalCRM {
     // Get lead
     async getLead(subscriberId) {
         return new Promise((resolve, reject) => {
-            this.db.get(
+            this.db.all(
                 'SELECT * FROM leads WHERE subscriber_id = ?',
                 [subscriberId],
-                (err, row) => {
+                (err, rows) => {
                     if (err) return reject(err);
-                    resolve(row);
+                    resolve(rows && rows[0]);
                 }
             );
         });
@@ -280,14 +280,14 @@ class LocalCRM {
     // Move stage
     async moveStage(subscriberId, newStage, reason = '') {
         return new Promise((resolve, reject) => {
-            this.db.get(
+            this.db.all(
                 'SELECT stage FROM leads WHERE subscriber_id = ?',
                 [subscriberId],
-                (err, row) => {
+                (err, rows) => {
                     if (err) return reject(err);
-                    if (!row) return reject(new Error('Lead not found'));
+                    if (!rows || !rows[0]) return reject(new Error('Lead not found'));
                     
-                    const oldStage = row.stage;
+                    const oldStage = rows[0].stage;
                     
                     this.db.run(
                         `UPDATE leads 
